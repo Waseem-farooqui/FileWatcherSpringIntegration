@@ -109,8 +109,8 @@
 
 	<bean id="sslContextSupport"
 		class="org.springframework.integration.ip.tcp.connection.DefaultTcpSSLContextSupport">
-		<constructor-arg value="${client.keystore}" />
-		<constructor-arg value="${client.truststore}" />
+		<constructor-arg value="file:./keys/server.truststore.jks" />
+		<constructor-arg value="file:./keys/client.truststore.jks" />
 		<constructor-arg value="admin321" />
 		<constructor-arg value="admin321" />
 	</bean>
