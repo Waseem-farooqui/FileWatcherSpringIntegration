@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:p="http://www.springframework.org/schema/p" xmlns:int="http://www.springframework.org/schema/integration"
+	xmlns:int-file="http://www.springframework.org/schema/integration/file"
+	xmlns:int-ip="http://www.springframework.org/schema/integration/ip"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-4.2.xsd
+		http://www.springframework.org/schema/integration/file http://www.springframework.org/schema/integration/file/spring-integration-file-4.2.xsd
+		http://www.springframework.org/schema/integration/ip http://www.springframework.org/schema/integration/ip/spring-integration-ip-4.2.xsd
+		http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration-4.2.xsd">
+
+	<!-- Context for the main package and the configuration file -->
+	<context:property-placeholder location="file:./application.properties" />
+	<context:component-scan base-package="org.tiss" />
+
+	<!-- Channels for the adapters and beans -->
+
+	<int:channel id="fileWithDelayHeader">
+		<int:queue capacity="2" />
+	</int:channel>
+
+	<int:channel id="fileWithContent">
+		<int:queue capacity="2" />
+	</int:channel>
+
+	<int:channel id="fileToBytes">
+		<int:queue capacity="1" />
+	</int:channel>
+
+	<int:channel id="jsonStrings">
+		<int:queue capacity="2" />
+	</int:channel>
+
+	<!-- Scanner of the Directory -->
+	<bean id="directoryScanner"
+		class="org.springframework.integration.file.WatchServiceDirectoryScanner">
+		<constructor-arg value="${input.directory}" />
+		<property name="autoStartup" value="true"></property>
+		<property name="filter" ref="compositeFilter"></property>
+	</bean>
+
+	<!-- <bean id="bufferedReader" class="java.io.BufferedReader">
+		<constructor-arg>
+			<bean class="java.io.InputStreamReader">
+				<constructor-arg>
+					<bean class="java.io.ByteArrayInputStream">
+						<constructor-arg>
+							<bean class="java.lang.Byte"></bean>
+						</constructor-arg>
+					</bean>
+				</constructor-arg>
+			</bean>
+		</constructor-arg>
+	</bean> -->
+	<bean id="compositeFilter"
+		class="org.springframework.integration.file.filters.CompositeFileListFilter">
+		<constructor-arg>
+			<list>
+				<bean
+					class="org.springframework.integration.file.filters.AcceptOnceFileListFilter" />
+				<bean
+					class="org.springframework.integration.file.filters.SimplePatternFileListFilter">
+					<constructor-arg value="${filter}" />
+				</bean>
+			</list>
+		</constructor-arg>
+	</bean>
+
+	<int-file:inbound-channel-adapter
+		directory="${input.directory}" scanner="directoryScanner" id="directoryWatcherFile"
+		queue-size="1" auto-startup="true">
+		<int:poller id="poller" fixed-delay="10000" />
+	</int-file:inbound-channel-adapter>
+
+	<!-- default poller -->
+	<int:poller default="true" fixed-delay="10000"></int:poller>
+
+	<int:transformer id="fileWithHeaderTransformer"
+		input-channel="directoryWatcherFile" output-channel="fileWithDelayHeader"
+		ref="emptyFileIdentifier" />
+	<bean id="emptyFileIdentifier" class="org.tiss.DelayHeaderIdentifier" />
+
+	<int:delayer id="delayer" input-channel="fileWithDelayHeader"
+		output-channel="fileWithContent" default-delay="20000"
+		delay-header-name="delay" />
+
+	<int-file:file-to-bytes-transformer
+		delete-files="true" input-channel="fileWithContent" output-channel="fileToBytes" />
+
+	<int:transformer ref="convertJson" method="transform"
+		input-channel="fileToBytes" output-channel="jsonStrings" />
+	<bean id="convertJson" class="org.tiss.JsonTransformer" />
+
+	<int:recipient-list-router id="recipientsListRouter"
+		input-channel="jsonStrings" ignore-send-failures="false">
+		<int:recipient channel="outputServer" />
+		<int:recipient channel="backupStorage" />
+	</int:recipient-list-router>
+
+	<!-- These are the Output Channels -->
+	<int-file:outbound-channel-adapter
+		auto-create-directory="true" directory="${directory.backup}"
+		filename-generator-expression="new java.text.SimpleDateFormat('yyyyMMddHHmmssSSS').format(new java.util.Date()) + '.json'"
+		id="backupStorage" />
+
+	<int-ip:tcp-outbound-channel-adapter
+		connection-factory="client" id="outputServer" retry-interval="60000" />
+
+	<bean id="sslContextSupport"
+		class="org.springframework.integration.ip.tcp.connection.DefaultTcpSSLContextSupport">
+		<constructor-arg value="${client.keystore}" />
+		<constructor-arg value="${client.truststore}" />
+		<constructor-arg value="admin321" />
+		<constructor-arg value="admin321" />
+	</bean>
+
+	<int-ip:tcp-connection-factory id="client"
+		type="client" ssl-context-support="sslContextSupport" host="${server.ip}"
+		port="${server.port}" single-use="true" so-timeout="1000000"
+		read-delay="20000" />
+
+
+
+</beans>
